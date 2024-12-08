@@ -1,79 +1,71 @@
 import pandas as pd
 import numpy as np
-import os
+import ta  # For technical indicators
 
-# Define file paths
-PREPROCESSED_FILE = "../data/processed/eth_usdt_preprocessed.csv"
-FEATURES_FILE = "../data/features/eth_usdt_features.csv"
-
-def generate_lag_features(df, column, lags):
+def add_technical_indicators(data):
     """
-    Generate lag features for a given column.
+    Add technical indicators to the dataset.
     """
-    for lag in lags:
-        df[f"{column}_lag_{lag}"] = df[column].shift(lag)
-    return df
-
-def generate_rolling_features(df, column, windows):
-    """
-    Generate rolling mean and rolling std for a given column.
-    """
-    for window in windows:
-        df[f"{column}_roll_mean_{window}"] = df[column].rolling(window).mean()
-        df[f"{column}_roll_std_{window}"] = df[column].rolling(window).std()
-    return df
-
-def calculate_macd(df, short_window=12, long_window=26, signal_window=9):
-    """
-    Calculate the MACD (Moving Average Convergence Divergence) and Signal Line.
-    """
-    df['ema_short'] = df['close'].ewm(span=short_window, adjust=False).mean()
-    df['ema_long'] = df['close'].ewm(span=long_window, adjust=False).mean()
-    df['macd'] = df['ema_short'] - df['ema_long']
-    df['macd_signal'] = df['macd'].ewm(span=signal_window, adjust=False).mean()
-    return df
-
-def calculate_rsi(df, window=14):
-    """
-    Calculate Relative Strength Index (RSI).
-    """
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    return df
-
-def main():
-    print("Loading data...")
-    if not os.path.exists(PREPROCESSED_FILE):
-        print(f"Preprocessed file not found: {PREPROCESSED_FILE}")
-        return
+    # Simple Moving Averages
+    data['SMA_10'] = data['close'].rolling(window=10).mean()
+    data['SMA_50'] = data['close'].rolling(window=50).mean()
     
-    df = pd.read_csv(PREPROCESSED_FILE)
+    # Exponential Moving Averages
+    data['EMA_10'] = data['close'].ewm(span=10, adjust=False).mean()
+    data['EMA_50'] = data['close'].ewm(span=50, adjust=False).mean()
+    
+    # Bollinger Bands
+    bollinger = ta.volatility.BollingerBands(close=data['close'], window=20, window_dev=2)
+    data['Bollinger_High'] = bollinger.bollinger_hband()
+    data['Bollinger_Low'] = bollinger.bollinger_lband()
+
+    # Relative Strength Index (RSI)
+    data['RSI'] = ta.momentum.RSIIndicator(close=data['close'], window=14).rsi()
+    
+    # Moving Average Convergence Divergence (MACD)
+    macd = ta.trend.MACD(close=data['close'])
+    data['MACD'] = macd.macd()
+    data['MACD_Signal'] = macd.macd_signal()
+    
+    # Average True Range (ATR)
+    data['ATR'] = ta.volatility.AverageTrueRange(high=data['high'], low=data['low'], close=data['close']).average_true_range()
+    
+    return data
+
+def generate_features(input_file, output_file):
+    """
+    Load raw data, generate features, and save to a new file.
+    """
+    print("Loading data...")
+    data = pd.read_csv(input_file)
     print("Data loaded.")
-
+    
     print("Generating features...")
-    # Generate lag features
-    df = generate_lag_features(df, column='close', lags=[1, 2, 3])
+    
+    # Add technical indicators
+    data = add_technical_indicators(data)
+    
+    # Add lagging features
+    for lag in range(1, 4):  # Add lag 1, 2, 3
+        data[f'close_lag_{lag}'] = data['close'].shift(lag)
+    
+    # Add time-based features
+    data['hour'] = pd.to_datetime(data['timestamp']).dt.hour
+    data['day_of_week'] = pd.to_datetime(data['timestamp']).dt.dayofweek
+    data['week_of_year'] = pd.to_datetime(data['timestamp']).dt.isocalendar().week
+    
+    # Normalize data (example for 'close' column)
+    data['close_normalized'] = (data['close'] - data['close'].mean()) / data['close'].std()
+    # Define target: Predicting if price increases or decreases
+    data['target'] = (data['close'].shift(-1) > data['close']).astype(int)
 
-    # Generate rolling features
-    df = generate_rolling_features(df, column='close', windows=[5, 10, 20])
 
-    # Calculate MACD
-    df = calculate_macd(df)
-
-    # Calculate RSI
-    df = calculate_rsi(df)
-
-    # Drop rows with NaN values (due to lagging/rolling calculations)
-    df.dropna(inplace=True)
-
-    # Save features
-    print(f"Saving features to {FEATURES_FILE}...")
-    os.makedirs(os.path.dirname(FEATURES_FILE), exist_ok=True)
-    df.to_csv(FEATURES_FILE, index=False)
+    # Drop rows with NaN values due to lagging and rolling calculations
+    data = data.dropna()
+    
+    print("Saving features to", output_file)
+    data.to_csv(output_file, index=False)
     print("Features saved.")
 
 if __name__ == "__main__":
-    main()
+    generate_features("./data/raw/eth_usdt_data.csv", "./data/features/eth_usdt_features.csv")
